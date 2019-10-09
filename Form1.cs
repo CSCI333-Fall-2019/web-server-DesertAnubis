@@ -10,7 +10,9 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
 using System.Drawing;
+using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
@@ -24,10 +26,36 @@ namespace WebServer
 {
    public partial class Form1 : Form
    {
+      TcpListener listener;
+      int port = 85;
+
       // Initializes the window
       public Form1()
       {
          InitializeComponent();
+      }
+
+      // Threadsafe IsRunning flag to keep track of running state
+      private bool _isRunning;
+      static readonly object _isRunningLock = new object();
+      public bool IsRunning
+      {
+         get
+         {
+            lock (_isRunningLock)
+            {
+               return this._isRunning;
+            }
+         }
+         set
+         {
+            lock (_isRunningLock)
+            {
+               this._isRunning = value;
+            }
+            startBtn.Enabled = !value;
+            stopBtn.Enabled = value;
+         }
       }
 
       // When the start button is clicked...
@@ -40,6 +68,26 @@ namespace WebServer
          // Creates a new client and gives it a thread
          TcpClient client = new TcpClient();
          ThreadPool.QueueUserWorkItem(GetRequestedItem, client);
+         Form1 main = new Form1();
+
+         // Start the main object's listener
+         main.listener = new TcpListener(IPAddress.Any, main.port);
+         main.listener.Start();
+
+         while (main.IsRunning) // Run until we're told to exit
+         {
+            try
+            {
+               // Each new request to the listener get a TcpClient
+               TcpClient lClient = main.listener.AcceptTcpClient();
+               // Send that TcpClient to its own thread to process
+               ThreadPool.QueueUserWorkItem(GetRequestedItem, lClient);
+            }
+            catch (Exception ex)
+            {
+               Console.WriteLine("Error received: " + ex.Message);
+            }
+         }
       }
 
       // When the stop button is clicked...
@@ -60,31 +108,39 @@ namespace WebServer
          // Cast the client object to a TcpClient
          TcpClient client = (TcpClient)parClient;
 
-         // Set up a few variables
+         // Response Data init
          Byte[] output = new Byte[1024];
          string response = String.Empty;
          // NetworkStream ns = client.GetStream();
 
-         // Status report
-         Console.WriteLine("Connecting...");
-
-         // Write a request to the web server
-         // Byte[] cmd = System.Text.Encoding.ASCII.GetBytes("GET / HTTP/1.0 \nHost: " + /* ??? */ "\n\n");
-         
-         /*
-         ns.Write(cmd, 0, cmd.Length);
-
-         // Get the output
-         Int32 bytes = ns.Read(output, 0, output.Length);
-
-         while (bytes > 0)
+         MemoryStream destination = new MemoryStream();
+         using (FileStream source = File.Open(@"Content\default.html", FileMode.Open, FileAccess.Read, FileShare.Read))
          {
-            response += System.Text.Encoding.ASCII.GetString(output);
-            bytes = ns.Read(output, 0, output.Length);
-         }
-         */
+            Console.WriteLine("Source length: (0)", source.Length.ToString());
 
-         Thread.Sleep(5000);
+            // Copy source to destination
+            source.CopyTo(destination);
+         }
+
+         // Create and Send the header
+         string header = CreateHeader(@"HTTP/1.0", @"text/html", destination.Length, " 200 OK");
+         client.Client.Send(Encoding.ASCII.GetBytes(header));
+         client.Client.Send(destination.ToArray());
+      }
+
+      public string CreateHeader(string webText, string contType, long contLength, string statusCode)
+      {
+         return "Thank you for visiting";
+      }
+
+      public void SetForegroundData(string value)
+      {
+         // Is this a background thread? If so, call parent
+         if (InvokeRequired)
+         {
+            this.BeginInvoke(new Action<string>(SetForegroundData));
+            return;
+         }
       }
    }
 }
